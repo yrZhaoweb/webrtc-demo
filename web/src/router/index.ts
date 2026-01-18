@@ -2,19 +2,16 @@ import { createRouter, createWebHistory } from "vue-router";
 
 /**
  * 路由配置
- * Requirements: 1.3, 2.1
  */
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
-      // Requirement 1.3: Home 页面路由
       path: "/",
       name: "home",
       component: () => import("../views/Home.vue"),
     },
     {
-      // Requirements: 1.3, 2.1: Room 页面路由，支持通过 URL 参数传递房间 ID
       // 支持两种方式：
       // 1. 路径参数: /room/:roomId
       // 2. 查询参数: /room?roomId=xxx

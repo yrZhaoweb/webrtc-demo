@@ -136,14 +136,6 @@ npm run build
 
 # 预览构建结果
 npm run preview
-```
-
-## 📖 详细文档
-
-- [测试指南](./TESTING_GUIDE.md) - 完整的测试步骤和问题排查
-- [需求文档](../.kiro/specs/webrtc-chatroom/requirements.md) - 功能需求
-- [设计文档](../.kiro/specs/webrtc-chatroom/design.md) - 技术设计
-- [任务列表](../.kiro/specs/webrtc-chatroom/tasks.md) - 实现计划
 
 ## 🌟 功能特性
 
@@ -186,3 +178,4 @@ MIT
 ## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！
+```

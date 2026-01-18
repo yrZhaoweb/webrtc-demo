@@ -3,7 +3,6 @@ import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { generateUserId } from "../utils";
 
-// Requirements: 1.1, 1.3
 const router = useRouter();
 
 const isCreating = ref(false);
@@ -16,7 +15,7 @@ const SIGNALING_SERVER_URL = "ws://localhost:8080";
 
 /**
  * 显示用户名输入
- * Requirement 1.1: 用户点击创建房间按钮
+ * 1.1: 用户点击创建房间按钮
  */
 function handleCreateRoomClick() {
   showNameInput.value = true;
@@ -24,7 +23,6 @@ function handleCreateRoomClick() {
 
 /**
  * 创建房间
- * Requirements: 1.1, 1.2, 1.3
  */
 async function handleCreateRoom() {
   if (!userName.value.trim()) {
@@ -39,8 +37,6 @@ async function handleCreateRoom() {
     const userId = generateUserId();
     const name = userName.value.trim();
 
-    // Requirement 1.1: 向 Signaling_Server 发送创建房间请求
-    // Requirement 1.2: Signaling_Server 生成唯一房间 ID 并返回
     const ws = new WebSocket(SIGNALING_SERVER_URL);
 
     await new Promise<void>((resolve, reject) => {
@@ -55,7 +51,6 @@ async function handleCreateRoom() {
           const roomId = message.roomId;
           ws.close();
 
-          // Requirement 1.3: 房间创建成功后自动跳转到 Room 页面
           router.push({
             name: "room",
             params: { roomId },
