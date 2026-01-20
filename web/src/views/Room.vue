@@ -1,43 +1,24 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useRoom } from "../composables/useRoom";
-import { useChat } from "../composables/useChat";
+import { useChat, type ChatMessage } from "../composables/useChat";
 import { generateInviteLink, formatTimestamp, generateUserId } from "../utils";
+import type { Participant } from "@yrzhao/aves-core";
 
 const route = useRoute();
 const router = useRouter();
 
 const SIGNALING_SERVER_URL = "ws://localhost:8080";
 
-const {
-  roomId,
-  participants,
-  currentUserId,
-  currentUserName,
-  isConnected,
-  isConnecting,
-  error: roomError,
-  joinRoom,
-  leaveRoom,
-  sendMessage: sendRoomMessage,
-  onMessage,
-  getCurrentUser,
-  onUserJoined,
-  onUserLeft,
-} = useRoom();
+const room = useRoom(SIGNALING_SERVER_URL);
+let chat: ReturnType<typeof useChat> | null = null;
 
-let chatComposable: ReturnType<typeof useChat> | null = null;
-const messages = ref<any[]>([]);
+const messages = ref<ChatMessage[]>([]);
 const messageInput = ref("");
-const isSending = ref(false);
-const sendError = ref<string | null>(null);
-
 const inviteLink = ref("");
 const copySuccess = ref(false);
 const showParticipants = ref(true);
-
-// 用户名输入
 const showNameInput = ref(false);
 const inputUserName = ref("");
 
@@ -55,63 +36,38 @@ const userId = computed(() => {
   return (route.query.userId as string) || generateUserId();
 });
 
-function initializeChat() {
-  const user = getCurrentUser();
-  chatComposable = useChat(sendRoomMessage, onMessage, user.id, user.name);
-  messages.value = chatComposable.messages.value;
-
-  // 监听用户加入事件
-  onUserJoined((user) => {
-    addSystemMessage(`${user.name} 已进入房间`);
-  });
-
-  // 监听用户离开事件
-  onUserLeft((_userId, userName) => {
-    addSystemMessage(`${userName} 已离开房间`);
-  });
-}
-
-function addSystemMessage(content: string) {
-  const systemMessage = {
-    id: `system-${Date.now()}-${Math.random()}`,
-    senderId: "system",
-    senderName: "系统",
-    content,
-    timestamp: Date.now(),
-    type: "system" as const,
-  };
-  messages.value.push(systemMessage);
-  scrollToBottom();
-}
-
 async function handleJoinRoom() {
   if (!urlRoomId.value) {
-    roomError.value = "房间 ID 不存在";
+    room.error.value = "房间 ID 不存在";
     return;
   }
 
-  // 如果没有用户名，显示输入框
   if (!userName.value) {
     showNameInput.value = true;
     return;
   }
 
   try {
-    await joinRoom(
-      SIGNALING_SERVER_URL,
-      urlRoomId.value,
-      userId.value,
-      userName.value,
-    );
+    await room.joinRoom(urlRoomId.value, userId.value, userName.value);
 
-    initializeChat();
+    // 初始化聊天
+    chat = useChat(room.client, userId.value, userName.value);
+    messages.value = chat.messages.value;
+
+    // 监听用户加入/离开
+    room.client.on("userJoined", (user: Participant) => {
+      chat?.addSystemMessage(`${user.name} 已进入房间`);
+    });
+
+    room.client.on("userLeft", (userId: string) => {
+      const user = room.participants.value.find((p) => p.id === userId);
+      chat?.addSystemMessage(`${user?.name || "用户"} 已离开房间`);
+    });
+
     inviteLink.value = generateInviteLink(urlRoomId.value);
     showNameInput.value = false;
   } catch (err) {
     console.error("Failed to join room:", err);
-    if (err instanceof Error && err.message.includes("not found")) {
-      roomError.value = "房间不存在";
-    }
   }
 }
 
@@ -133,22 +89,12 @@ async function copyInviteLink() {
   }
 }
 
-async function sendMessage() {
-  if (!chatComposable || !messageInput.value.trim()) {
-    return;
-  }
+function sendMessage() {
+  if (!chat || !messageInput.value.trim()) return;
 
-  try {
-    await chatComposable.sendMessage(messageInput.value);
-    messageInput.value = "";
-    sendError.value = null;
-    scrollToBottom();
-  } catch (err) {
-    sendError.value = err instanceof Error ? err.message : "发送失败";
-  }
-}
+  chat.sendMessage(messageInput.value);
+  messageInput.value = "";
 
-function scrollToBottom() {
   setTimeout(() => {
     const messageList = document.querySelector(".message-list");
     if (messageList) {
@@ -158,7 +104,7 @@ function scrollToBottom() {
 }
 
 function handleLeaveRoom() {
-  leaveRoom();
+  room.leaveRoom();
   router.push({ name: "home" });
 }
 
@@ -169,12 +115,6 @@ function toggleParticipants() {
 onMounted(() => {
   handleJoinRoom();
 });
-
-onUnmounted(() => {
-  if (isConnected.value) {
-    leaveRoom();
-  }
-});
 </script>
 
 <template>
@@ -182,7 +122,9 @@ onUnmounted(() => {
     <div class="room-header">
       <div class="header-left">
         <h1>聊天室</h1>
-        <span class="room-id" v-if="roomId">房间 ID: {{ roomId }}</span>
+        <span class="room-id" v-if="room.roomId.value"
+          >房间 ID: {{ room.roomId.value }}</span
+        >
       </div>
       <div class="header-right">
         <button class="leave-btn" @click="handleLeaveRoom">离开房间</button>
@@ -212,17 +154,17 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-if="isConnecting" class="connecting-status">
+    <div v-if="room.isConnecting.value" class="connecting-status">
       <div class="spinner"></div>
       <p>正在连接...</p>
     </div>
 
-    <div v-if="roomError" class="error-banner">
-      {{ roomError }}
+    <div v-if="room.error.value" class="error-banner">
+      {{ room.error.value }}
       <button @click="router.push({ name: 'home' })">返回首页</button>
     </div>
 
-    <div v-if="isConnected && !roomError" class="room-content">
+    <div v-if="room.roomId.value && !room.error.value" class="room-content">
       <div class="sidebar" :class="{ collapsed: !showParticipants }">
         <button class="toggle-sidebar-btn" @click="toggleParticipants">
           {{ showParticipants ? "◀" : "▶" }}
@@ -245,14 +187,16 @@ onUnmounted(() => {
           </div>
 
           <div class="participants-section">
-            <h3>在线 ({{ participants.length + 1 }})</h3>
+            <h3>在线 ({{ room.participants.value.length + 1 }})</h3>
             <div class="participants-list">
               <div class="participant current-user">
                 <span class="participant-icon">👤</span>
-                <span class="participant-name">{{ currentUserName }} (你)</span>
+                <span class="participant-name"
+                  >{{ room.currentUserName.value }} (你)</span
+                >
               </div>
               <div
-                v-for="participant in participants"
+                v-for="participant in room.participants.value"
                 :key="participant.id"
                 class="participant"
               >
@@ -272,9 +216,11 @@ onUnmounted(() => {
             class="message"
             :class="{
               'own-message':
-                message.senderId === currentUserId && message.type !== 'system',
+                message.senderId === room.currentUserId.value &&
+                message.type !== 'system',
               'other-message':
-                message.senderId !== currentUserId && message.type !== 'system',
+                message.senderId !== room.currentUserId.value &&
+                message.type !== 'system',
               'system-message': message.type === 'system',
             }"
           >
@@ -298,7 +244,6 @@ onUnmounted(() => {
         </div>
 
         <div class="message-input-container">
-          <div v-if="sendError" class="send-error">{{ sendError }}</div>
           <div class="message-input-wrapper">
             <input
               v-model="messageInput"
@@ -306,14 +251,13 @@ onUnmounted(() => {
               placeholder="输入消息..."
               class="message-input"
               @keyup.enter="sendMessage"
-              :disabled="isSending"
             />
             <button
               class="send-btn"
               @click="sendMessage"
-              :disabled="!messageInput.trim() || isSending"
+              :disabled="!messageInput.trim()"
             >
-              {{ isSending ? "发送中..." : "发送" }}
+              发送
             </button>
           </div>
         </div>
@@ -630,12 +574,6 @@ onUnmounted(() => {
   border-top: 1px solid #e0e0e0;
   padding: 16px 24px;
   background: white;
-}
-
-.send-error {
-  color: #c33;
-  font-size: 0.85rem;
-  margin-bottom: 8px;
 }
 
 .message-input-wrapper {

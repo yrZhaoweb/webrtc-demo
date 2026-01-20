@@ -1,91 +1,42 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter } from "vue-router";
+import { useRoom } from "../composables/useRoom";
 import { generateUserId } from "../utils";
 
 const router = useRouter();
-
-const isCreating = ref(false);
-const userName = ref("");
-const showNameInput = ref(false);
-const error = ref<string | null>(null);
-
-// WebSocket 服务器地址
 const SIGNALING_SERVER_URL = "ws://localhost:8080";
 
-/**
- * 显示用户名输入
- * 1.1: 用户点击创建房间按钮
- */
+const room = useRoom(SIGNALING_SERVER_URL);
+const userName = ref("");
+const showNameInput = ref(false);
+
 function handleCreateRoomClick() {
   showNameInput.value = true;
 }
 
-/**
- * 创建房间
- */
 async function handleCreateRoom() {
-  if (!userName.value.trim()) {
-    return;
-  }
+  if (!userName.value.trim()) return;
 
   try {
-    isCreating.value = true;
-    error.value = null;
-
-    // 生成唯一用户 ID
     const userId = generateUserId();
     const name = userName.value.trim();
+    const roomId = await room.createRoom(userId, name);
 
-    const ws = new WebSocket(SIGNALING_SERVER_URL);
-
-    await new Promise<void>((resolve, reject) => {
-      ws.onopen = () => {
-        // 发送创建房间请求
-        ws.send(JSON.stringify({ type: "create-room" }));
-      };
-
-      ws.onmessage = (event) => {
-        const message = JSON.parse(event.data);
-        if (message.type === "room-created") {
-          const roomId = message.roomId;
-          ws.close();
-
-          router.push({
-            name: "room",
-            params: { roomId },
-            query: { userName: name, userId },
-          });
-          resolve();
-        } else if (message.type === "error") {
-          ws.close();
-          reject(new Error(message.message));
-        }
-      };
-
-      ws.onerror = () => {
-        reject(new Error("无法连接到服务器"));
-      };
-
-      // 超时处理
-      setTimeout(() => {
-        if (ws.readyState !== WebSocket.CLOSED) {
-          ws.close();
-          reject(new Error("创建房间超时"));
-        }
-      }, 5000);
+    router.push({
+      name: "room",
+      params: { roomId },
+      query: { userName: name, userId },
     });
   } catch (err) {
     console.error("Failed to create room:", err);
-    error.value = err instanceof Error ? err.message : "创建房间失败";
-    isCreating.value = false;
   }
 }
 
 function cancelNameInput() {
   showNameInput.value = false;
   userName.value = "";
-  error.value = null;
+  room.error.value = null;
 }
 </script>
 
@@ -99,7 +50,7 @@ function cancelNameInput() {
         <button
           class="create-room-btn"
           @click="handleCreateRoomClick"
-          :disabled="isCreating"
+          :disabled="room.isConnecting.value"
         >
           创建房间
         </button>
@@ -119,22 +70,22 @@ function cancelNameInput() {
           <button
             class="confirm-btn"
             @click="handleCreateRoom"
-            :disabled="!userName.trim() || isCreating"
+            :disabled="!userName.trim() || room.isConnecting.value"
           >
-            {{ isCreating ? "创建中..." : "确认创建" }}
+            {{ room.isConnecting.value ? "创建中..." : "确认创建" }}
           </button>
           <button
             class="cancel-btn"
             @click="cancelNameInput"
-            :disabled="isCreating"
+            :disabled="room.isConnecting.value"
           >
             取消
           </button>
         </div>
       </div>
 
-      <div v-if="error" class="error-message">
-        {{ error }}
+      <div v-if="room.error.value" class="error-message">
+        {{ room.error.value }}
       </div>
     </div>
   </div>
