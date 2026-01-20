@@ -1,22 +1,13 @@
 import { ref, computed, onUnmounted } from "vue";
-import { SignalingService } from "../services/signalingService";
-import { WebRTCManager } from "../services/webrtcManager";
-import { WebRTCConnectionManager } from "../services/webrtcConnectionManager";
-import type { Participant } from "../types";
+import { AvesClient, type Participant } from "@yrzhao/aves-core";
 
 /**
  * useRoom - 房间状态管理 Composable
- * 专注于房间业务逻辑：房间信息、参与者列表、连接状态
- * WebRTC 连接逻辑已抽离到 WebRTCConnectionManager
+ * 使用 aves-core 的 AvesClient 管理房间和 WebRTC 连接
  */
 export function useRoom() {
-  // 服务实例
-  const signalingService = new SignalingService();
-  const webrtcManager = new WebRTCManager();
-  const webrtcConnectionManager = new WebRTCConnectionManager(
-    signalingService,
-    webrtcManager
-  );
+  // AvesClient 实例
+  let avesClient: AvesClient | null = null;
 
   // 状态
   const roomId = ref<string | null>(null);
@@ -31,68 +22,77 @@ export function useRoom() {
   const userJoinedCallbacks: Set<(user: Participant) => void> = new Set();
   const userLeftCallbacks: Set<(userId: string, userName: string) => void> =
     new Set();
+  const messageCallbacks: Set<(peerId: string, message: any) => void> =
+    new Set();
 
   // 计算属性
   const isInRoom = computed(() => roomId.value !== null && isConnected.value);
   const participantCount = computed(() => participants.value.length);
 
   /**
-   * 连接到信令服务器并初始化 WebRTC
+   * 初始化 AvesClient
    */
-  async function connectToSignalingServer(serverUrl: string): Promise<void> {
-    try {
-      await signalingService.connect(serverUrl);
-
-      // 初始化 WebRTC 连接管理器
-      webrtcConnectionManager.initialize(currentUserId.value);
-
-      // 设置业务逻辑相关的信令处理器
-      setupBusinessHandlers();
-    } catch (err) {
-      error.value = "Failed to connect to signaling server";
-      throw err;
+  function initializeClient(serverUrl: string): void {
+    if (avesClient) {
+      return;
     }
-  }
 
-  /**
-   * 设置业务逻辑相关的信令处理器
-   * 只处理房间业务，不涉及 WebRTC 连接细节
-   */
-  function setupBusinessHandlers(): void {
-    signalingService.onUserJoined((user: Participant) => {
+    avesClient = new AvesClient({
+      signalingUrl: serverUrl,
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+      ],
+      debug: true,
+    });
+
+    // 监听用户加入事件
+    avesClient.on("userJoined", (user: Participant) => {
       console.log("[Room] User joined:", user.name);
       participants.value.push(user);
 
       // 触发用户加入回调
       userJoinedCallbacks.forEach((callback) => callback(user));
-
-      // 使用 ID 比较避免双方同时发起连接
-      // 规则：ID 较小的用户主动发起连接
-      if (currentUserId.value < user.id) {
-        console.log(
-          `[Room] Initiating connection to ${user.name} (我的 ID 较小)`
-        );
-        webrtcConnectionManager.connectToPeer(user.id).catch((err) => {
-          console.error(`[Room] Failed to connect to ${user.name}:`, err);
-        });
-      } else {
-        console.log(
-          `[Room] Waiting for ${user.name} to initiate connection (对方 ID 较小)`
-        );
-      }
     });
 
-    signalingService.onUserLeft((userId: string) => {
+    // 监听用户离开事件
+    avesClient.on("userLeft", (userId: string) => {
       const user = participants.value.find((p) => p.id === userId);
       const userName = user?.name || "未知用户";
       console.log("[Room] User left:", userName);
 
       participants.value = participants.value.filter((p) => p.id !== userId);
-      webrtcConnectionManager.disconnectFromPeer(userId);
 
       // 触发用户离开回调
       userLeftCallbacks.forEach((callback) => callback(userId, userName));
     });
+
+    // 监听消息
+    avesClient.on("message", (peerId: string, message: any) => {
+      messageCallbacks.forEach((callback) => callback(peerId, message));
+    });
+
+    // 监听错误
+    avesClient.on("error", (err: Error) => {
+      console.error("[Room] Error:", err);
+      error.value = err.message;
+    });
+
+    // 监听连接状态变化
+    avesClient.on(
+      "connectionStateChange",
+      (peerId: string, state: RTCPeerConnectionState) => {
+        console.log(`[Room] Connection with ${peerId}: ${state}`);
+      },
+    );
+
+    // 监听 DataChannel 状态变化
+    avesClient.on(
+      "dataChannelStateChange",
+      (peerId: string, state: RTCDataChannelState) => {
+        console.log(`[Room] DataChannel with ${peerId}: ${state}`);
+      },
+    );
   }
 
   /**
@@ -101,7 +101,7 @@ export function useRoom() {
   async function createRoom(
     serverUrl: string,
     userId: string,
-    userName: string
+    userName: string,
   ): Promise<string> {
     try {
       isConnecting.value = true;
@@ -110,15 +110,15 @@ export function useRoom() {
       currentUserId.value = userId;
       currentUserName.value = userName;
 
-      // 连接到信令服务器
-      await connectToSignalingServer(serverUrl);
+      // 初始化客户端
+      initializeClient(serverUrl);
 
       // 创建房间
-      const newRoomId = await signalingService.createRoom();
+      const newRoomId = await avesClient!.createRoom();
       roomId.value = newRoomId;
 
       // 加入房间
-      await signalingService.joinRoom(newRoomId, userId, userName);
+      await avesClient!.joinRoom(newRoomId, userId, userName);
 
       isConnected.value = true;
       isConnecting.value = false;
@@ -132,11 +132,14 @@ export function useRoom() {
     }
   }
 
+  /**
+   * 加入房间
+   */
   async function joinRoom(
     serverUrl: string,
     targetRoomId: string,
     userId: string,
-    userName: string
+    userName: string,
   ): Promise<void> {
     try {
       isConnecting.value = true;
@@ -146,36 +149,18 @@ export function useRoom() {
       currentUserName.value = userName;
       roomId.value = targetRoomId;
 
-      await connectToSignalingServer(serverUrl);
+      // 初始化客户端
+      initializeClient(serverUrl);
 
-      const existingParticipants = await signalingService.joinRoom(
+      // 加入房间
+      const existingParticipants = await avesClient!.joinRoom(
         targetRoomId,
         userId,
-        userName
+        userName,
       );
 
       participants.value = existingParticipants;
       console.log("[Room] Existing participants:", existingParticipants);
-
-      // 使用 ID 比较避免双方同时发起连接
-      // 规则：ID 较小的用户主动发起连接
-      existingParticipants.forEach((participant) => {
-        if (currentUserId.value < participant.id) {
-          console.log(
-            `[Room] Initiating connection to ${participant.name} (我的 ID 较小)`
-          );
-          webrtcConnectionManager.connectToPeer(participant.id).catch((err) => {
-            console.error(
-              `[Room] Failed to connect to ${participant.name}:`,
-              err
-            );
-          });
-        } else {
-          console.log(
-            `[Room] Waiting for ${participant.name} to initiate connection (对方 ID 较小)`
-          );
-        }
-      });
 
       isConnected.value = true;
       isConnecting.value = false;
@@ -190,14 +175,14 @@ export function useRoom() {
   /**
    * 离开房间
    */
-  function leaveRoom(): void {
+  async function leaveRoom(): Promise<void> {
     console.log("[Room] Leaving room");
 
-    // 断开所有 WebRTC 连接
-    webrtcConnectionManager.disconnectAll();
-
-    // 断开信令服务器连接
-    signalingService.disconnect();
+    if (avesClient) {
+      await avesClient.leaveRoom();
+      avesClient.destroy();
+      avesClient = null;
+    }
 
     // 重置状态
     roomId.value = null;
@@ -207,10 +192,30 @@ export function useRoom() {
   }
 
   /**
-   * 获取 WebRTC Manager 实例（供 useChat 使用）
+   * 发送消息到所有用户
    */
-  function getWebRTCManager(): WebRTCManager {
-    return webrtcConnectionManager.getWebRTCManager();
+  function sendMessage(message: any): void {
+    if (!avesClient) {
+      throw new Error("Client not initialized");
+    }
+    avesClient.sendMessage(message);
+  }
+
+  /**
+   * 发送消息到指定用户
+   */
+  function sendMessageToPeer(peerId: string, message: any): void {
+    if (!avesClient) {
+      throw new Error("Client not initialized");
+    }
+    avesClient.sendMessageToPeer(peerId, message);
+  }
+
+  /**
+   * 监听消息
+   */
+  function onMessage(callback: (peerId: string, message: any) => void): void {
+    messageCallbacks.add(callback);
   }
 
   /**
@@ -234,7 +239,7 @@ export function useRoom() {
    * 监听用户离开事件
    */
   function onUserLeft(
-    callback: (userId: string, userName: string) => void
+    callback: (userId: string, userName: string) => void,
   ): void {
     userLeftCallbacks.add(callback);
   }
@@ -260,7 +265,9 @@ export function useRoom() {
     createRoom,
     joinRoom,
     leaveRoom,
-    getWebRTCManager,
+    sendMessage,
+    sendMessageToPeer,
+    onMessage,
     getCurrentUser,
     onUserJoined,
     onUserLeft,

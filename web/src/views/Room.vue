@@ -20,7 +20,8 @@ const {
   error: roomError,
   joinRoom,
   leaveRoom,
-  getWebRTCManager,
+  sendMessage: sendRoomMessage,
+  onMessage,
   getCurrentUser,
   onUserJoined,
   onUserLeft,
@@ -55,9 +56,8 @@ const userId = computed(() => {
 });
 
 function initializeChat() {
-  const webrtcManager = getWebRTCManager();
   const user = getCurrentUser();
-  chatComposable = useChat(webrtcManager, user.id, user.name);
+  chatComposable = useChat(sendRoomMessage, onMessage, user.id, user.name);
   messages.value = chatComposable.messages.value;
 
   // 监听用户加入事件
@@ -66,7 +66,7 @@ function initializeChat() {
   });
 
   // 监听用户离开事件
-  onUserLeft((userId, userName) => {
+  onUserLeft((_userId, userName) => {
     addSystemMessage(`${userName} 已离开房间`);
   });
 }
@@ -101,7 +101,7 @@ async function handleJoinRoom() {
       SIGNALING_SERVER_URL,
       urlRoomId.value,
       userId.value,
-      userName.value
+      userName.value,
     );
 
     initializeChat();

@@ -1,15 +1,27 @@
 import { ref, computed } from "vue";
-import type { ChatMessage } from "../types";
-import type { WebRTCManager } from "../services/webrtcManager";
+
+/**
+ * 聊天消息类型
+ */
+export interface ChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  content: string;
+  timestamp: number;
+  type?: "user" | "system";
+}
 
 /**
  * useChat - 聊天状态管理 Composable
  * 管理消息列表、消息发送
+ * 使用 useRoom 提供的消息发送和接收功能
  */
 export function useChat(
-  webrtcManager: WebRTCManager,
+  sendMessageFn: (message: any) => void,
+  onMessageFn: (callback: (peerId: string, message: any) => void) => void,
   currentUserId: string,
-  currentUserName: string
+  currentUserName: string,
 ) {
   const messages = ref<ChatMessage[]>([]);
   const isSending = ref(false);
@@ -50,7 +62,7 @@ export function useChat(
         timestamp: Date.now(),
       };
 
-      webrtcManager.sendMessage(message);
+      sendMessageFn(message);
       addMessage(message);
 
       isSending.value = false;
@@ -63,7 +75,7 @@ export function useChat(
   }
 
   function setupMessageHandler(): void {
-    webrtcManager.onMessage((peerId: string, message: ChatMessage) => {
+    onMessageFn((peerId: string, message: ChatMessage) => {
       console.log(`Received message from ${peerId}:`, message);
       addMessage(message);
     });
