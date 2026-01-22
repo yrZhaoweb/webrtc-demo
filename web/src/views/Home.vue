@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter } from "vue-router";
-import { useRoom } from "../composables/useRoom";
+import { useAvesService } from "../services/avesService";
 import { generateUserId } from "../utils";
 
 const router = useRouter();
-const SIGNALING_SERVER_URL = "ws://localhost:8080";
 
-const room = useRoom(SIGNALING_SERVER_URL);
+const { isConnecting, error, createRoom } = useAvesService();
 const userName = ref("");
 const showNameInput = ref(false);
 
@@ -21,7 +20,7 @@ async function handleCreateRoom() {
   try {
     const userId = generateUserId();
     const name = userName.value.trim();
-    const roomId = await room.createRoom(userId, name);
+    const roomId = await createRoom(userId, name);
 
     router.push({
       name: "room",
@@ -36,7 +35,7 @@ async function handleCreateRoom() {
 function cancelNameInput() {
   showNameInput.value = false;
   userName.value = "";
-  room.error.value = null;
+  error.value = null;
 }
 </script>
 
@@ -50,7 +49,7 @@ function cancelNameInput() {
         <button
           class="create-room-btn"
           @click="handleCreateRoomClick"
-          :disabled="room.isConnecting.value"
+          :disabled="isConnecting"
         >
           创建房间
         </button>
@@ -70,22 +69,22 @@ function cancelNameInput() {
           <button
             class="confirm-btn"
             @click="handleCreateRoom"
-            :disabled="!userName.trim() || room.isConnecting.value"
+            :disabled="!userName.trim() || isConnecting"
           >
-            {{ room.isConnecting.value ? "创建中..." : "确认创建" }}
+            {{ isConnecting ? "创建中..." : "确认创建" }}
           </button>
           <button
             class="cancel-btn"
             @click="cancelNameInput"
-            :disabled="room.isConnecting.value"
+            :disabled="isConnecting"
           >
             取消
           </button>
         </div>
       </div>
 
-      <div v-if="room.error.value" class="error-message">
-        {{ room.error.value }}
+      <div v-if="error" class="error-message">
+        {{ error }}
       </div>
     </div>
   </div>

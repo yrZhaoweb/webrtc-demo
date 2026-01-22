@@ -80,9 +80,9 @@ export function useRoom(serverUrl: string) {
     participants.value = [];
   }
 
-  onUnmounted(() => {
-    leaveRoom();
-  });
+  // 注意：不在 onUnmounted 中自动调用 leaveRoom()
+  // 因为页面跳转时会导致组件卸载，但用户可能还想保持在房间中
+  // 只在 Room.vue 中显式调用 leaveRoom()
 
   return {
     client,

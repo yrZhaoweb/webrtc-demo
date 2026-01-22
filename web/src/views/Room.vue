@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { useRoom } from "../composables/useRoom";
+import { useAvesService } from "../services/avesService";
 import { useChat, type ChatMessage } from "../composables/useChat";
 import { generateInviteLink, formatTimestamp, generateUserId } from "../utils";
 import type { Participant } from "@yrzhao/aves-core";
@@ -9,9 +9,18 @@ import type { Participant } from "@yrzhao/aves-core";
 const route = useRoute();
 const router = useRouter();
 
-const SIGNALING_SERVER_URL = "ws://localhost:8080";
+const {
+  client,
+  roomId,
+  participants,
+  currentUserId,
+  currentUserName,
+  isConnecting,
+  error,
+  joinRoom,
+  leaveRoom,
+} = useAvesService();
 
-const room = useRoom(SIGNALING_SERVER_URL);
 let chat: ReturnType<typeof useChat> | null = null;
 
 const messages = ref<ChatMessage[]>([]);
@@ -38,7 +47,14 @@ const userId = computed(() => {
 
 async function handleJoinRoom() {
   if (!urlRoomId.value) {
-    room.error.value = "房间 ID 不存在";
+    error.value = "房间 ID 不存在";
+    return;
+  }
+
+  // 如果已经在这个房间中，不需要重新加入
+  if (roomId.value === urlRoomId.value && client.value) {
+    initializeChat();
+    inviteLink.value = generateInviteLink(urlRoomId.value);
     return;
   }
 
@@ -48,27 +64,31 @@ async function handleJoinRoom() {
   }
 
   try {
-    await room.joinRoom(urlRoomId.value, userId.value, userName.value);
-
-    // 初始化聊天
-    chat = useChat(room.client, userId.value, userName.value);
-    messages.value = chat.messages.value;
-
-    // 监听用户加入/离开
-    room.client.on("userJoined", (user: Participant) => {
-      chat?.addSystemMessage(`${user.name} 已进入房间`);
-    });
-
-    room.client.on("userLeft", (userId: string) => {
-      const user = room.participants.value.find((p) => p.id === userId);
-      chat?.addSystemMessage(`${user?.name || "用户"} 已离开房间`);
-    });
-
+    await joinRoom(urlRoomId.value, userId.value, userName.value);
+    initializeChat();
     inviteLink.value = generateInviteLink(urlRoomId.value);
     showNameInput.value = false;
   } catch (err) {
     console.error("Failed to join room:", err);
   }
+}
+
+function initializeChat() {
+  if (!client.value) return;
+
+  // 初始化聊天
+  chat = useChat(client.value, currentUserId.value, currentUserName.value);
+  messages.value = chat.messages.value;
+
+  // 监听用户加入/离开
+  client.value.on("userJoined", (user: Participant) => {
+    chat?.addSystemMessage(`${user.name} 已进入房间`);
+  });
+
+  client.value.on("userLeft", (userId: string) => {
+    const user = participants.value.find((p) => p.id === userId);
+    chat?.addSystemMessage(`${user?.name || "用户"} 已离开房间`);
+  });
 }
 
 function confirmJoinRoom() {
@@ -104,7 +124,7 @@ function sendMessage() {
 }
 
 function handleLeaveRoom() {
-  room.leaveRoom();
+  leaveRoom();
   router.push({ name: "home" });
 }
 
@@ -115,6 +135,11 @@ function toggleParticipants() {
 onMounted(() => {
   handleJoinRoom();
 });
+
+onUnmounted(() => {
+  // 只在真正离开应用时清理，不在页面跳转时清理
+  // leaveRoom() 会在用户点击"离开房间"按钮时显式调用
+});
 </script>
 
 <template>
@@ -122,9 +147,7 @@ onMounted(() => {
     <div class="room-header">
       <div class="header-left">
         <h1>聊天室</h1>
-        <span class="room-id" v-if="room.roomId.value"
-          >房间 ID: {{ room.roomId.value }}</span
-        >
+        <span class="room-id" v-if="roomId">房间 ID: {{ roomId }}</span>
       </div>
       <div class="header-right">
         <button class="leave-btn" @click="handleLeaveRoom">离开房间</button>
@@ -154,17 +177,17 @@ onMounted(() => {
       </div>
     </div>
 
-    <div v-if="room.isConnecting.value" class="connecting-status">
+    <div v-if="isConnecting" class="connecting-status">
       <div class="spinner"></div>
       <p>正在连接...</p>
     </div>
 
-    <div v-if="room.error.value" class="error-banner">
-      {{ room.error.value }}
+    <div v-if="error" class="error-banner">
+      {{ error }}
       <button @click="router.push({ name: 'home' })">返回首页</button>
     </div>
 
-    <div v-if="room.roomId.value && !room.error.value" class="room-content">
+    <div v-if="roomId && !error" class="room-content">
       <div class="sidebar" :class="{ collapsed: !showParticipants }">
         <button class="toggle-sidebar-btn" @click="toggleParticipants">
           {{ showParticipants ? "◀" : "▶" }}
@@ -187,16 +210,14 @@ onMounted(() => {
           </div>
 
           <div class="participants-section">
-            <h3>在线 ({{ room.participants.value.length + 1 }})</h3>
+            <h3>在线 ({{ participants.length + 1 }})</h3>
             <div class="participants-list">
               <div class="participant current-user">
                 <span class="participant-icon">👤</span>
-                <span class="participant-name"
-                  >{{ room.currentUserName.value }} (你)</span
-                >
+                <span class="participant-name">{{ currentUserName }} (你)</span>
               </div>
               <div
-                v-for="participant in room.participants.value"
+                v-for="participant in participants"
                 :key="participant.id"
                 class="participant"
               >
@@ -216,11 +237,9 @@ onMounted(() => {
             class="message"
             :class="{
               'own-message':
-                message.senderId === room.currentUserId.value &&
-                message.type !== 'system',
+                message.senderId === currentUserId && message.type !== 'system',
               'other-message':
-                message.senderId !== room.currentUserId.value &&
-                message.type !== 'system',
+                message.senderId !== currentUserId && message.type !== 'system',
               'system-message': message.type === 'system',
             }"
           >
