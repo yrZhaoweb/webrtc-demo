@@ -1,62 +1,73 @@
 /**
- * 从 URL 中解析房间 ID
- * @param url - 完整的 URL 字符串或 URL 对象
- * @returns 房间 ID，如果不存在则返回 null
+ * Parse room ID from URL
+ * @param url - Complete URL string or URL object
+ * @returns Room ID if exists, null otherwise
  */
 export function parseRoomIdFromUrl(url: string | URL): string | null {
   try {
     const urlObj = typeof url === "string" ? new URL(url) : url;
     const roomId = urlObj.searchParams.get("roomId");
-    return roomId;
+    return roomId && roomId.trim() ? roomId.trim() : null;
   } catch (error) {
+    console.error("Failed to parse room ID from URL:", error);
     return null;
   }
 }
 
 /**
- * 生成邀请链接
- * @param roomId - 房间 ID
- * @param baseUrl - 基础 URL（可选，默认使用当前页面的 origin）
- * @returns 完整的邀请链接
+ * Generate invite link for a room
+ * @param roomId - Room ID (must be non-empty)
+ * @param baseUrl - Base URL (optional, defaults to current origin)
+ * @returns Complete invite link
+ * @throws Error if roomId is empty
  */
 export function generateInviteLink(roomId: string, baseUrl?: string): string {
+  if (!roomId || !roomId.trim()) {
+    throw new Error("Room ID cannot be empty");
+  }
+
   const base = baseUrl || window.location.origin;
-  // 使用路径参数格式，更简洁
-  const url = new URL(`/room/${roomId}`, base);
+  const url = new URL(`/room/${roomId.trim()}`, base);
   return url.toString();
 }
 
 /**
- * 验证消息内容是否为空或仅包含空白字符
- * @param content - 消息内容
- * @returns 如果消息有效返回 true，否则返回 false
+ * Validate message content
+ * @param content - Message content to validate
+ * @returns true if message is valid (non-empty after trim)
  */
 export function isValidMessage(content: string): boolean {
-  return content.trim().length > 0;
+  return typeof content === "string" && content.trim().length > 0;
 }
 
 /**
- * 生成唯一的消息 ID
- * @returns 唯一的消息 ID
+ * Generate unique message ID
+ * Uses timestamp and random string for uniqueness
+ * @returns Unique message ID
  */
 export function generateMessageId(): string {
-  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
 /**
- * 生成唯一的用户 ID
- * @returns 唯一的用户 ID
+ * Generate unique user ID
+ * Uses timestamp and random string for uniqueness
+ * @returns Unique user ID with 'user-' prefix
  */
 export function generateUserId(): string {
-  return `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  return `user-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
 /**
- * 格式化时间戳为可读的时间字符串
- * @param timestamp - 时间戳（毫秒）
- * @returns 格式化的时间字符串
+ * Format timestamp to readable time string (HH:MM)
+ * @param timestamp - Timestamp in milliseconds
+ * @returns Formatted time string
  */
 export function formatTimestamp(timestamp: number): string {
+  if (!Number.isFinite(timestamp) || timestamp < 0) {
+    return "00:00";
+  }
+
   const date = new Date(timestamp);
   const hours = date.getHours().toString().padStart(2, "0");
   const minutes = date.getMinutes().toString().padStart(2, "0");

@@ -1,7 +1,22 @@
 {
-  "files": [],
-  "references": [
-    { "path": "./tsconfig.app.json" },
-    { "path": "./tsconfig.node.json" }
-  ]
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": true,
+    "isolatedModules": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "types": [
+      "vite/client",
+      "svelte",
+      "vitest/globals",
+      "@testing-library/jest-dom"
+    ]
+  },
+  "include": ["src/**/*.ts", "src/**/*.svelte"],
+  "exclude": ["node_modules", "dist"]
 }

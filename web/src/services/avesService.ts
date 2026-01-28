@@ -1,21 +1,36 @@
+import { writable, derived, get } from "svelte/store";
 import { AvesClient, type Participant } from "@yrzhao/aves-core";
-import { ref, computed } from "vue";
 
 const SIGNALING_SERVER_URL = "ws://localhost:8080";
 
-// 单例 AvesClient 实例
+// Error messages enum for consistency
+const ErrorMessages = {
+  CREATE_ROOM_FAILED: "创建房间失败",
+  JOIN_ROOM_FAILED: "加入房间失败",
+  ROOM_ID_MISSING: "房间 ID 不存在",
+} as const;
+
+type ErrorMessage = (typeof ErrorMessages)[keyof typeof ErrorMessages];
+
+// Writable stores
+const roomId = writable<string | null>(null);
+const participants = writable<Participant[]>([]);
+const currentUserId = writable<string>("");
+const currentUserName = writable<string>("");
+const isConnecting = writable<boolean>(false);
+const error = writable<string | null>(null);
+
+// Client instance (singleton)
 let clientInstance: AvesClient | null = null;
 
-// 响应式状态
-const roomId = ref<string | null>(null);
-const participants = ref<Participant[]>([]);
-const currentUserId = ref("");
-const currentUserName = ref("");
-const isConnecting = ref(false);
-const error = ref<string | null>(null);
+// Derived store for client
+const client = derived([roomId], ([$roomId], set) => {
+  set(clientInstance);
+});
 
 /**
- * 获取或创建 AvesClient 单例实例
+ * Get or create AvesClient singleton instance
+ * @returns AvesClient instance (guaranteed non-null)
  */
 function getClient(): AvesClient {
   if (!clientInstance) {
@@ -25,61 +40,84 @@ function getClient(): AvesClient {
       debug: true,
     });
 
-    // 设置事件监听
-    clientInstance.on("userJoined", (user: Participant) => {
-      participants.value.push(user);
-    });
-
-    clientInstance.on("userLeft", (userId: string) => {
-      participants.value = participants.value.filter((p) => p.id !== userId);
-    });
-
-    clientInstance.on("error", (err: Error) => {
-      error.value = err.message;
-    });
+    setupEventListeners(clientInstance);
   }
 
   return clientInstance;
 }
 
 /**
- * 创建房间
+ * Setup event listeners for AvesClient
+ * Extracted for better separation of concerns
  */
-export async function createRoom(
-  userId: string,
-  userName: string,
-): Promise<string> {
-  isConnecting.value = true;
-  error.value = null;
-  currentUserId.value = userId;
-  currentUserName.value = userName;
+function setupEventListeners(client: AvesClient): void {
+  client.on("userJoined", (user: Participant) => {
+    participants.update((prev) => [...prev, user]);
+  });
+
+  client.on("userLeft", (userId: string) => {
+    participants.update((prev) =>
+      prev.filter((participant) => participant.id !== userId),
+    );
+  });
+
+  client.on("error", (err: Error) => {
+    error.set(err.message);
+  });
+}
+
+/**
+ * Check if client is initialized
+ */
+function isClientInitialized(): boolean {
+  return clientInstance !== null;
+}
+
+/**
+ * Create a new room
+ * @param userId - Unique user identifier
+ * @param userName - Display name for the user
+ * @returns Promise resolving to the created room ID
+ * @throws Error if room creation fails
+ */
+async function createRoom(userId: string, userName: string): Promise<string> {
+  isConnecting.set(true);
+  error.set(null);
+  currentUserId.set(userId);
+  currentUserName.set(userName);
 
   try {
     const client = getClient();
     const newRoomId = await client.createRoom();
     await client.joinRoom(newRoomId, userId, userName);
-    roomId.value = newRoomId;
+    roomId.set(newRoomId);
     return newRoomId;
   } catch (err) {
-    error.value = err instanceof Error ? err.message : "创建房间失败";
+    const errorMessage =
+      err instanceof Error ? err.message : ErrorMessages.CREATE_ROOM_FAILED;
+    error.set(errorMessage);
     throw err;
   } finally {
-    isConnecting.value = false;
+    isConnecting.set(false);
   }
 }
 
 /**
- * 加入房间
+ * Join an existing room
+ * @param targetRoomId - ID of the room to join
+ * @param userId - Unique user identifier
+ * @param userName - Display name for the user
+ * @throws Error if joining fails
  */
-export async function joinRoom(
+async function joinRoom(
   targetRoomId: string,
   userId: string,
   userName: string,
 ): Promise<void> {
-  isConnecting.value = true;
-  error.value = null;
-  currentUserId.value = userId;
-  currentUserName.value = userName;
+  isConnecting.set(true);
+  error.set(null);
+  currentUserId.set(userId);
+  currentUserName.set(userName);
 
   try {
     const client = getClient();
@@ -88,54 +126,68 @@ export async function joinRoom(
       userId,
       userName,
     );
-    participants.value = existingParticipants;
-    roomId.value = targetRoomId;
+    participants.set(existingParticipants);
+    roomId.set(targetRoomId);
   } catch (err) {
-    error.value = err instanceof Error ? err.message : "加入房间失败";
+    const errorMessage =
+      err instanceof Error ? err.message : ErrorMessages.JOIN_ROOM_FAILED;
+    error.set(errorMessage);
     throw err;
   } finally {
-    isConnecting.value = false;
+    isConnecting.set(false);
   }
 }
 
 /**
- * 离开房间
+ * Leave the current room and cleanup resources
  */
-export async function leaveRoom(): Promise<void> {
-  if (clientInstance) {
+async function leaveRoom(): Promise<void> {
+  if (!clientInstance) {
+    return;
+  }
+
+  try {
     await clientInstance.leaveRoom();
     clientInstance.destroy();
+  } catch (err) {
+    console.error("Error during room cleanup:", err);
+  } finally {
     clientInstance = null;
+    resetState();
   }
-  roomId.value = null;
-  participants.value = [];
-  currentUserId.value = "";
-  currentUserName.value = "";
 }
 
 /**
- * 发送消息
+ * Reset all state to initial values
  */
-export function sendMessage(message: any): void {
-  const client = getClient();
-  client.sendMessage(message);
+function resetState(): void {
+  roomId.set(null);
+  participants.set([]);
+  currentUserId.set("");
+  currentUserName.set("");
+  error.set(null);
 }
 
 /**
- * 导出响应式状态
+ * Export the aves service
  */
-export function useAvesService() {
-  return {
-    client: computed(() => clientInstance),
-    roomId,
-    participants,
-    currentUserId,
-    currentUserName,
-    isConnecting,
-    error,
-    createRoom,
-    joinRoom,
-    leaveRoom,
-    sendMessage,
-  };
-}
+export const avesService = {
+  // Stores (read-only from outside)
+  roomId,
+  participants,
+  currentUserId,
+  currentUserName,
+  isConnecting,
+  error,
+  client,
+
+  // Methods
+  createRoom,
+  joinRoom,
+  leaveRoom,
+  getClient,
+  isClientInitialized,
+} as const;
+
+// Export error messages for use in components
+export { ErrorMessages };
