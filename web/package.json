@@ -14,7 +14,7 @@
     "test:visual": "playwright test --grep @visual"
   },
   "dependencies": {
-    "@yrzhao/aves-core": "^0.1.0",
+    "@yrzhao/aves-core": "^0.2.0",
     "svelte": "^4.2.8",
     "svelte-routing": "^2.12.0"
   },

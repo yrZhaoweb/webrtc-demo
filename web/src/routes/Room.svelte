@@ -3,6 +3,7 @@
   import { navigate } from "svelte-routing";
   import { avesService } from "../services/avesService";
   import { createChat, type ChatService } from "../lib/chat";
+  import ConnectionStatus from "../components/ConnectionStatus.svelte";
   import {
     generateInviteLink,
     formatTimestamp,
@@ -215,6 +216,11 @@
 </script>
 
 <div class="room">
+  <!-- 连接状态指示器 -->
+  {#if $avesService.roomId}
+    <ConnectionStatus />
+  {/if}
+
   <div class="room-header">
     <div class="header-left">
       <h1>聊天室</h1>

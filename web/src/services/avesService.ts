@@ -1,16 +1,33 @@
 import { writable, derived, get } from "svelte/store";
 import { AvesClient, type Participant } from "@yrzhao/aves-core";
 
-const SIGNALING_SERVER_URL = "ws://localhost:8080";
+const SIGNALING_SERVER_URL =
+  import.meta.env.VITE_SIGNALING_URL || "ws://localhost:8080";
 
 // Error messages enum for consistency
 const ErrorMessages = {
   CREATE_ROOM_FAILED: "创建房间失败",
   JOIN_ROOM_FAILED: "加入房间失败",
   ROOM_ID_MISSING: "房间 ID 不存在",
+  CONNECTION_FAILED: "连接失败",
+  RECONNECTING: "正在重新连接...",
 } as const;
 
-type ErrorMessage = (typeof ErrorMessages)[keyof typeof ErrorMessages];
+// Connection state type
+export type ConnectionState =
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "failed";
+
+// Peer connection states
+export interface PeerConnectionState {
+  peerId: string;
+  peerName: string;
+  connectionState: RTCPeerConnectionState;
+  dataChannelState: RTCDataChannelState | "closed";
+}
 
 // Writable stores
 const roomId = writable<string | null>(null);
@@ -19,12 +36,17 @@ const currentUserId = writable<string>("");
 const currentUserName = writable<string>("");
 const isConnecting = writable<boolean>(false);
 const error = writable<string | null>(null);
+const connectionState = writable<ConnectionState>("disconnected");
+const peerStates = writable<Map<string, PeerConnectionState>>(new Map());
 
 // Client instance (singleton)
 let clientInstance: AvesClient | null = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_DELAY = 3000;
 
 // Derived store for client
-const client = derived([roomId], ([$roomId], set) => {
+const client = derived([roomId], (_, set) => {
   set(clientInstance);
 });
 
@@ -59,11 +81,126 @@ function setupEventListeners(client: AvesClient): void {
     participants.update((prev) =>
       prev.filter((participant) => participant.id !== userId),
     );
+    // Remove peer state
+    peerStates.update((states) => {
+      states.delete(userId);
+      return new Map(states);
+    });
   });
 
   client.on("error", (err: Error) => {
+    console.error("[AvesService] Error:", err);
     error.set(err.message);
+    connectionState.set("failed");
   });
+
+  // Monitor signaling state
+  client.on("signalingStateChange", (state: string) => {
+    console.log("[AvesService] Signaling state:", state);
+    if (state === "connected") {
+      connectionState.set("connected");
+      reconnectAttempts = 0;
+    } else if (state === "disconnected") {
+      connectionState.set("disconnected");
+      handleDisconnection();
+    }
+  });
+
+  // Monitor WebRTC connection states
+  client.on(
+    "connectionStateChange",
+    (peerId: string, state: RTCPeerConnectionState) => {
+      console.log(`[AvesService] Peer ${peerId} connection state:`, state);
+      updatePeerState(peerId, { connectionState: state });
+    },
+  );
+
+  // Monitor DataChannel states
+  client.on(
+    "dataChannelStateChange",
+    (peerId: string, state: RTCDataChannelState) => {
+      console.log(`[AvesService] Peer ${peerId} data channel state:`, state);
+      updatePeerState(peerId, { dataChannelState: state });
+    },
+  );
+}
+
+/**
+ * Update peer connection state
+ */
+function updatePeerState(
+  peerId: string,
+  updates: Partial<Omit<PeerConnectionState, "peerId" | "peerName">>,
+): void {
+  peerStates.update((states) => {
+    const existing = states.get(peerId);
+    const participant = clientInstance
+      ?.getParticipants()
+      .find((p) => p.id === peerId);
+
+    const newState: PeerConnectionState = {
+      peerId,
+      peerName: participant?.name || existing?.peerName || "Unknown",
+      connectionState:
+        updates.connectionState ?? existing?.connectionState ?? "new",
+      dataChannelState:
+        updates.dataChannelState ?? existing?.dataChannelState ?? "closed",
+    };
+
+    states.set(peerId, newState);
+    return new Map(states);
+  });
+}
+
+/**
+ * Handle disconnection and attempt reconnection
+ */
+async function handleDisconnection(): Promise<void> {
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    error.set("连接失败，已达到最大重试次数");
+    connectionState.set("failed");
+    return;
+  }
+
+  const currentRoomIdValue = get(roomId);
+  const currentUserIdValue = get(currentUserId);
+  const currentUserNameValue = get(currentUserName);
+
+  if (
+    !clientInstance ||
+    !currentRoomIdValue ||
+    !currentUserIdValue ||
+    !currentUserNameValue
+  ) {
+    return;
+  }
+
+  reconnectAttempts++;
+  connectionState.set("reconnecting");
+  error.set(
+    `${ErrorMessages.RECONNECTING} (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`,
+  );
+
+  console.log(
+    `[AvesService] Reconnection attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`,
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, RECONNECT_DELAY));
+
+  try {
+    // Try to rejoin the room
+    await joinRoom(
+      currentRoomIdValue,
+      currentUserIdValue,
+      currentUserNameValue,
+    );
+    error.set(null);
+    connectionState.set("connected");
+    reconnectAttempts = 0;
+  } catch (err) {
+    console.error("[AvesService] Reconnection failed:", err);
+    await handleDisconnection(); // Retry
+  }
 }
 
 /**
@@ -82,6 +219,7 @@ function isClientInitialized(): boolean {
  */
 async function createRoom(userId: string, userName: string): Promise<string> {
   isConnecting.set(true);
+  connectionState.set("connecting");
   error.set(null);
   currentUserId.set(userId);
   currentUserName.set(userName);
@@ -91,11 +229,13 @@ async function createRoom(userId: string, userName: string): Promise<string> {
     const newRoomId = await client.createRoom();
     await client.joinRoom(newRoomId, userId, userName);
     roomId.set(newRoomId);
+    connectionState.set("connected");
     return newRoomId;
   } catch (err) {
     const errorMessage =
       err instanceof Error ? err.message : ErrorMessages.CREATE_ROOM_FAILED;
     error.set(errorMessage);
+    connectionState.set("failed");
     throw err;
   } finally {
     isConnecting.set(false);
@@ -115,6 +255,7 @@ async function joinRoom(
   userName: string,
 ): Promise<void> {
   isConnecting.set(true);
+  connectionState.set("connecting");
   error.set(null);
   currentUserId.set(userId);
   currentUserName.set(userName);
@@ -128,10 +269,20 @@ async function joinRoom(
     );
     participants.set(existingParticipants);
     roomId.set(targetRoomId);
+    connectionState.set("connected");
+
+    // Initialize peer states for existing participants
+    existingParticipants.forEach((participant) => {
+      updatePeerState(participant.id, {
+        connectionState: "new",
+        dataChannelState: "connecting",
+      });
+    });
   } catch (err) {
     const errorMessage =
       err instanceof Error ? err.message : ErrorMessages.JOIN_ROOM_FAILED;
     error.set(errorMessage);
+    connectionState.set("failed");
     throw err;
   } finally {
     isConnecting.set(false);
@@ -153,6 +304,7 @@ async function leaveRoom(): Promise<void> {
     console.error("Error during room cleanup:", err);
   } finally {
     clientInstance = null;
+    reconnectAttempts = 0;
     resetState();
   }
 }
@@ -166,6 +318,8 @@ function resetState(): void {
   currentUserId.set("");
   currentUserName.set("");
   error.set(null);
+  connectionState.set("disconnected");
+  peerStates.set(new Map());
 }
 
 /**
@@ -180,6 +334,8 @@ export const avesService = {
   isConnecting,
   error,
   client,
+  connectionState,
+  peerStates,
 
   // Methods
   createRoom,
