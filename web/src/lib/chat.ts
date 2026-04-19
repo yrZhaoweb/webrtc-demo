@@ -1,6 +1,13 @@
 import { writable } from "svelte/store";
 import type { AvesClient } from "@yrzhao/aves-core";
 import { generateMessageId, isValidMessage } from "../utils";
+import {
+  createChatEnvelope,
+  isChatMessage,
+  isRoomEnvelope,
+  limitSharedHistory,
+  mergeChatMessages,
+} from "./roomProtocol";
 import type { ChatMessage } from "./types";
 
 // Configuration
@@ -10,6 +17,9 @@ export interface ChatService {
   messages: ReturnType<typeof writable<ChatMessage[]>>;
   sendMessage: (content: string) => void;
   addSystemMessage: (content: string) => void;
+  hydrateMessages: (history: ChatMessage[]) => void;
+  getMessages: () => ChatMessage[];
+  destroy: () => void;
 }
 
 export function createChat(
@@ -18,17 +28,32 @@ export function createChat(
   currentUserName: string,
 ): ChatService {
   const messages = writable<ChatMessage[]>([]);
+  let currentMessages: ChatMessage[] = [];
 
-  // Listen for messages from other users
-  client.on("message", (_peerId: string, message: ChatMessage) => {
-    messages.update((msgs) => {
-      const updated = [...msgs, message];
-      // Limit message history to prevent memory issues
-      return updated.length > MAX_MESSAGES
-        ? updated.slice(-MAX_MESSAGES)
-        : updated;
-    });
-  });
+  function syncMessages(nextMessages: ChatMessage[]): void {
+    currentMessages =
+      nextMessages.length > MAX_MESSAGES
+        ? nextMessages.slice(-MAX_MESSAGES)
+        : nextMessages;
+    messages.set(currentMessages);
+  }
+
+  function appendMessages(nextMessages: ChatMessage[]): void {
+    syncMessages(mergeChatMessages(currentMessages, nextMessages));
+  }
+
+  const messageListener = (_peerId: string, message: unknown) => {
+    if (isRoomEnvelope(message) && message.kind === "chat-message") {
+      appendMessages([message.payload]);
+      return;
+    }
+
+    if (isChatMessage(message)) {
+      appendMessages([message]);
+    }
+  };
+
+  client.on("message", messageListener);
 
   function sendMessage(content: string): void {
     if (!isValidMessage(content)) {
@@ -44,14 +69,8 @@ export function createChat(
       type: "user",
     };
 
-    client.sendMessage(message);
-
-    messages.update((msgs) => {
-      const updated = [...msgs, message];
-      return updated.length > MAX_MESSAGES
-        ? updated.slice(-MAX_MESSAGES)
-        : updated;
-    });
+    client.sendMessage(createChatEnvelope(message));
+    appendMessages([message]);
   }
 
   function addSystemMessage(content: string): void {
@@ -68,17 +87,21 @@ export function createChat(
       type: "system",
     };
 
-    messages.update((msgs) => {
-      const updated = [...msgs, message];
-      return updated.length > MAX_MESSAGES
-        ? updated.slice(-MAX_MESSAGES)
-        : updated;
-    });
+    appendMessages([message]);
+  }
+
+  function hydrateMessages(history: ChatMessage[]): void {
+    syncMessages(limitSharedHistory(mergeChatMessages(currentMessages, history)));
   }
 
   return {
     messages,
     sendMessage,
     addSystemMessage,
+    hydrateMessages,
+    getMessages: () => currentMessages,
+    destroy: () => {
+      client.off("message", messageListener);
+    },
   };
 }

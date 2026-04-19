@@ -12,7 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@yrzhao/aves-node": "^0.2.0",
+    "@yrzhao/aves-node": "file:../../aves-node",
     "uuid": "^9.0.1",
     "ws": "^8.16.0"
   },

@@ -1,60 +1,113 @@
-import { WebSocketServer, WebSocket } from "ws";
+import { WebSocketServer, WebSocket, type ServerOptions } from "ws";
+import { pathToFileURL } from "url";
 import { AvesServer } from "@yrzhao/aves-node";
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8080;
+const DEFAULT_PORT = 8080;
 
-// 创建 WebSocket 服务器
-const wss = new WebSocketServer({ port: PORT });
+export function resolvePort(portValue: string | undefined = process.env.PORT): number {
+  const parsed = Number.parseInt(portValue ?? "", 10);
+  return Number.isFinite(parsed) ? parsed : DEFAULT_PORT;
+}
 
-// 创建 Aves 服务器实例
-const avesServer = new AvesServer({ debug: true });
+function closeServer(wss: WebSocketServer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    wss.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
 
-console.log(`WebSocket server started on port ${PORT}`);
+export function registerProcessHandlers(
+  wss: WebSocketServer,
+  exit: (code: number) => void = process.exit,
+): () => void {
+  const uncaughtExceptionHandler = (error: Error) => {
+    console.error("❌ Uncaught Exception:", error);
+  };
 
-// 全局错误处理
-process.on("uncaughtException", (error) => {
-  console.error("❌ Uncaught Exception:", error);
-  // 不要退出进程，让服务继续运行
-});
+  const unhandledRejectionHandler = (reason: unknown, promise: Promise<unknown>) => {
+    console.error("❌ Unhandled Rejection at:", promise, "reason:", reason);
+  };
 
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("❌ Unhandled Rejection at:", promise, "reason:", reason);
-});
-
-// 优雅关闭
-process.on("SIGTERM", () => {
-  console.log("SIGTERM signal received: closing HTTP server");
-  wss.close(() => {
+  const createSignalHandler = (signal: "SIGTERM" | "SIGINT") => async () => {
+    console.log(`${signal} signal received: closing HTTP server`);
+    await closeServer(wss);
     console.log("HTTP server closed");
-    process.exit(0);
+    exit(0);
+  };
+
+  const sigtermHandler = createSignalHandler("SIGTERM");
+  const sigintHandler = createSignalHandler("SIGINT");
+
+  process.on("uncaughtException", uncaughtExceptionHandler);
+  process.on("unhandledRejection", unhandledRejectionHandler);
+  process.on("SIGTERM", sigtermHandler);
+  process.on("SIGINT", sigintHandler);
+
+  return () => {
+    process.off("uncaughtException", uncaughtExceptionHandler);
+    process.off("unhandledRejection", unhandledRejectionHandler);
+    process.off("SIGTERM", sigtermHandler);
+    process.off("SIGINT", sigintHandler);
+  };
+}
+
+export function createDemoServer(
+  portOrOptions: number | ServerOptions = resolvePort(),
+): {
+  avesServer: AvesServer;
+  wss: WebSocketServer;
+  close: () => Promise<void>;
+  disposeHandlers: () => void;
+} {
+  const options =
+    typeof portOrOptions === "number" ? { port: portOrOptions } : portOrOptions;
+  const wss = new WebSocketServer(options);
+  const avesServer = new AvesServer({ debug: true });
+  const disposeHandlers = registerProcessHandlers(wss);
+
+  if ("port" in options && typeof options.port === "number") {
+    console.log(`WebSocket server started on port ${options.port}`);
+  } else {
+    console.log("WebSocket server created without binding a port");
+  }
+
+  wss.on("connection", (socket: WebSocket) => {
+    console.log("✅ New client connected");
+    avesServer.handleConnection(socket);
+
+    socket.on("close", () => {
+      console.log("👋 Client disconnected");
+    });
+
+    socket.on("error", (error) => {
+      console.error("❌ WebSocket error:", error);
+    });
   });
-});
 
-process.on("SIGINT", () => {
-  console.log("\nSIGINT signal received: closing HTTP server");
-  wss.close(() => {
-    console.log("HTTP server closed");
-    process.exit(0);
-  });
-});
-
-wss.on("connection", (socket: WebSocket) => {
-  console.log("✅ New client connected");
-
-  // 将 WebSocket 连接传递给 AvesServer
-  avesServer.handleConnection(socket);
-
-  socket.on("close", () => {
-    console.log("👋 Client disconnected");
+  wss.on("error", (error) => {
+    console.error("❌ WebSocket Server error:", error);
   });
 
-  socket.on("error", (error) => {
-    console.error("❌ WebSocket error:", error);
-  });
-});
+  console.log("🚀 Server is ready to accept connections");
 
-wss.on("error", (error) => {
-  console.error("❌ WebSocket Server error:", error);
-});
+  return {
+    avesServer,
+    wss,
+    close: () => closeServer(wss),
+    disposeHandlers,
+  };
+}
 
-console.log("🚀 Server is ready to accept connections");
+const isDirectExecution =
+  typeof process !== "undefined" &&
+  !!process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectExecution) {
+  createDemoServer(resolvePort());
+}

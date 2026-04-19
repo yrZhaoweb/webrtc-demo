@@ -41,8 +41,8 @@
 
 <div class="home">
   <div class="home-content">
-    <h1>WebRTC 聊天室</h1>
-    <p class="subtitle">基于 WebRTC 的实时点对点文本聊天</p>
+    <h1>WebRTC 实时协作室</h1>
+    <p class="subtitle">基于 WebRTC 的文本、文件与实时语音协作</p>
 
     {#if !showNameInput}
       <div class="action-section">
@@ -59,7 +59,6 @@
           placeholder="请输入您的名字"
           class="name-input"
           on:keyup={handleKeyUp}
-          autofocus
         />
         <div class="button-group">
           <button

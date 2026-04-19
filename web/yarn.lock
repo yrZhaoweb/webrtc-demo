@@ -277,7 +277,7 @@
     pretty-format "^29.7.0"
 
 "@yrzhao/aves-core@file:../../aves-core":
-  version "0.1.0"
+  version "0.2.0"
   resolved "file:../../aves-core"
 
 acorn-walk@^8.3.2:
