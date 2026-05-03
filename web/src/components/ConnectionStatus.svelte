@@ -150,10 +150,9 @@
 
 <style>
   .connection-status {
-    position: fixed;
-    top: 80px;
-    right: 20px;
-    z-index: 1000;
+    position: relative;
+    z-index: 10;
+    flex: 0 0 auto;
     max-width: 350px;
   }
 
@@ -203,7 +202,10 @@
   }
 
   .status-details {
-    margin-top: 8px;
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: min(350px, calc(100vw - 40px));
     background: white;
     border-radius: 12px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
@@ -312,9 +314,13 @@
 
   @media (max-width: 768px) {
     .connection-status {
-      top: 70px;
-      right: 10px;
-      max-width: 300px;
+      max-width: min(300px, 100%);
+    }
+
+    .status-details {
+      left: 0;
+      right: auto;
+      width: min(300px, calc(100vw - 28px));
     }
 
     .status-button {

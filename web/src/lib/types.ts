@@ -1,10 +1,12 @@
-export interface ChatMessage {
+import type { JsonObject } from "@yrzhao/aves-core";
+
+export interface ChatMessage extends JsonObject {
   id: string;
   senderId: string;
   senderName: string;
   content: string;
   timestamp: number;
-  type?: "user" | "system";
+  type: "user" | "system";
 }
 
 export interface ErrorState {

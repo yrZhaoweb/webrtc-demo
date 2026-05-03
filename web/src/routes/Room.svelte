@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from "svelte";
   import { navigate } from "svelte-routing";
-  import type { AvesClient, Participant } from "@yrzhao/aves-core";
+  import type { AvesClient, AvesMessage, Participant } from "@yrzhao/aves-core";
   import ConnectionStatus from "../components/ConnectionStatus.svelte";
+  import ValidationConsole from "../components/ValidationConsole.svelte";
   import { createChat, type ChatService } from "../lib/chat";
   import {
     createAudioPolicyEnvelope,
@@ -12,7 +13,10 @@
     isRoomEnvelope,
   } from "../lib/roomProtocol";
   import type { ChatMessage } from "../lib/types";
-  import { avesService, type DemoFileTransfer } from "../services/avesService";
+  import {
+    avesService,
+    type DemoFileTransfer,
+  } from "../services/avesService";
   import {
     formatTimestamp,
     generateInviteLink,
@@ -32,12 +36,23 @@
     joinRoom,
     leaveRoom,
     localAudioState,
+    localVideoState,
+    screenShareState,
     remoteAudioStreams,
+    remoteVideoStreams,
     fileTransfers,
+    localPreviewStream,
     startVoice,
     stopVoice,
     toggleMute,
+    startVideo,
+    stopVideo,
+    toggleVideoMute,
+    startScreenShare,
+    stopScreenShare,
     sendFile,
+    startServerDiagnosticsPolling,
+    stopServerDiagnosticsPolling,
   } = avesService;
 
   let chat: ChatService | null = null;
@@ -53,6 +68,7 @@
   let selectedFile: File | null = null;
   let selectedPeerId = "";
   let remoteAudioEntries: Array<[string, MediaStream]> = [];
+  let remoteVideoEntries: Array<[string, MediaStream]> = [];
   let chatUnsubscribe: (() => void) | null = null;
   let chatEventClient: AvesClient | null = null;
   let knownParticipantNames = new Map<string, string>();
@@ -80,6 +96,7 @@
   }
 
   $: remoteAudioEntries = Array.from($remoteAudioStreams.entries());
+  $: remoteVideoEntries = Array.from($remoteVideoStreams.entries());
   $: isHost = !!$currentUserId && roomHostId === $currentUserId;
   $: canOpenMicrophone = roomVoiceEnabled;
   $: if (
@@ -274,7 +291,7 @@
 
   function sendEnvelopeToPeerWithRetry(
     peerId: string,
-    message: unknown,
+    message: AvesMessage,
     attempt = 0,
   ): void {
     const clientInstance = $client as AvesClient | null;
@@ -432,6 +449,52 @@
     toggleMute();
   }
 
+  async function handleVideoToggle(): Promise<void> {
+    try {
+      if ($localVideoState.active) {
+        stopVideo();
+        return;
+      }
+
+      await startVideo();
+    } catch (videoError) {
+      console.error("Failed to toggle video:", videoError);
+    }
+  }
+
+  function handleVideoMuteToggle(): void {
+    toggleVideoMute();
+  }
+
+  async function handleScreenShareToggle(): Promise<void> {
+    try {
+      if ($screenShareState.active) {
+        stopScreenShare();
+        return;
+      }
+
+      await startScreenShare();
+    } catch (shareError) {
+      console.error("Failed to toggle screen share:", shareError);
+    }
+  }
+
+  function attachVideoStream(node: HTMLVideoElement, stream: MediaStream) {
+    node.srcObject = stream;
+    void node.play().catch(() => {});
+
+    return {
+      update(nextStream: MediaStream) {
+        node.srcObject = nextStream;
+        void node.play().catch(() => {});
+      },
+      destroy() {
+        node.pause();
+        node.srcObject = null;
+      },
+    };
+  }
+
   function handleFileChange(event: Event): void {
     const input = event.currentTarget as HTMLInputElement;
     selectedFile = input.files?.[0] ?? null;
@@ -576,6 +639,7 @@
   }
 
   onMount(() => {
+    const stopDiagnosticsPolling = startServerDiagnosticsPolling();
     const beforeUnloadHandler = (event: BeforeUnloadEvent) => {
       if (!isHost || !$joinedRoomId) {
         return;
@@ -589,6 +653,7 @@
     void handleJoinRoom();
 
     return () => {
+      stopDiagnosticsPolling();
       window.removeEventListener("beforeunload", beforeUnloadHandler);
     };
   });
@@ -602,14 +667,11 @@
       chatEventClient.off("message", handleRoomMessage);
     }
     remoteAudioEntries = [];
+    stopServerDiagnosticsPolling();
   });
 </script>
 
 <div class="room">
-  {#if $joinedRoomId}
-    <ConnectionStatus />
-  {/if}
-
   <div class="room-header">
     <div class="header-left">
       <h1>聊天室</h1>
@@ -618,6 +680,9 @@
       {/if}
     </div>
     <div class="header-actions">
+      {#if $joinedRoomId}
+        <ConnectionStatus />
+      {/if}
       <button class="leave-btn" on:click={handleLeaveRoom}>离开房间</button>
     </div>
   </div>
@@ -688,7 +753,7 @@
     </div>
   {/if}
 
-  {#if $joinedRoomId && !$error}
+  {#if $joinedRoomId}
     <div class="room-content">
       <aside class="sidebar" class:collapsed={!showParticipants}>
         <button class="toggle-sidebar-btn" on:click={toggleParticipants}>
@@ -737,7 +802,10 @@
       </aside>
 
       <div class="chat-area">
-        <div class="toolbelt">
+        <div class="room-tools" data-testid="room-tools">
+          <ValidationConsole currentRoomId={$joinedRoomId} />
+
+          <div class="toolbelt" data-testid="toolbelt">
           <section class="tool-card" data-testid="voice-panel">
             <div class="tool-card-header">
               <h3>实时语音</h3>
@@ -785,6 +853,95 @@
                   <div class="remote-audio-item" data-testid={`remote-audio-${peerId}`}>
                     <span>{participantLabel(peerId)}</span>
                     <audio autoplay playsinline use:attachStream={stream}></audio>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          </section>
+
+          <section class="tool-card" data-testid="video-panel">
+            <div class="tool-card-header">
+              <h3>实时视频</h3>
+              <span class:status-live={$localVideoState.active && !$localVideoState.muted}>
+                {#if $screenShareState.active}
+                  屏幕共享中
+                {:else if $localVideoState.active && !$localVideoState.muted}
+                  摄像头已开启
+                {:else if $localVideoState.active && $localVideoState.muted}
+                  摄像头已静音
+                {:else}
+                  摄像头未开启
+                {/if}
+              </span>
+            </div>
+            <div class="tool-card-actions">
+              <button
+                class="secondary-btn"
+                data-testid="video-toggle"
+                on:click={() => void handleVideoToggle()}
+              >
+                {$localVideoState.active ? "关闭摄像头" : "开启摄像头"}
+              </button>
+              <button
+                class="secondary-btn"
+                data-testid="video-mute-toggle"
+                on:click={handleVideoMuteToggle}
+                disabled={!$localVideoState.active}
+              >
+                {$localVideoState.muted ? "取消静音" : "静音视频"}
+              </button>
+              <button
+                class="secondary-btn"
+                data-testid="screen-share-toggle"
+                on:click={() => void handleScreenShareToggle()}
+              >
+                {$screenShareState.active ? "停止共享" : "共享屏幕"}
+              </button>
+            </div>
+            {#if $localPreviewStream}
+              <div class="local-video-preview">
+                <video
+                  muted
+                  playsinline
+                  autoplay
+                  use:attachVideoStream={$localPreviewStream}
+                  class="local-video"
+                >
+                  <track kind="captions" />
+                </video>
+                {#if $localVideoState.muted}
+                  <span class="video-muted-overlay">摄像头已静音</span>
+                {/if}
+                {#if $screenShareState.active}
+                  <span class="screen-share-badge">正在共享屏幕</span>
+                {/if}
+              </div>
+            {/if}
+            <p class="muted-text">
+              开启摄像头后，远程成员可以看到你的画面。你可以选择静音摄像头或共享屏幕代替画面。
+            </p>
+          </section>
+
+          <section class="tool-card" data-testid="video-grid-panel">
+            <div class="tool-card-header">
+              <h3>远程视频</h3>
+              <span>{remoteVideoEntries.length} 个视频流</span>
+            </div>
+            <div class="remote-video-grid">
+              {#if remoteVideoEntries.length === 0}
+                <p class="muted-text">当前没有远端视频流</p>
+              {:else}
+                {#each remoteVideoEntries as [peerId, stream] (peerId)}
+                  <div class="remote-video-item" data-testid={`remote-video-${peerId}`}>
+                    <div class="remote-video-label">{participantLabel(peerId)}</div>
+                    <video
+                      autoplay
+                      playsinline
+                      use:attachVideoStream={stream}
+                      class="remote-video"
+                    >
+                      <track kind="captions" />
+                    </video>
                   </div>
                 {/each}
               {/if}
@@ -852,6 +1009,7 @@
               {/if}
             </div>
           </section>
+          </div>
         </div>
 
         <div class="message-list" bind:this={messageListElement} data-testid="message-list">
@@ -917,7 +1075,9 @@
   .room {
     display: flex;
     flex-direction: column;
+    height: 100vh;
     min-height: 100vh;
+    overflow: hidden;
     background: linear-gradient(180deg, #f7f7fb 0%, #eef2f7 100%);
   }
 
@@ -935,6 +1095,14 @@
     display: flex;
     align-items: center;
     gap: 16px;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    min-width: 0;
   }
 
   .header-left h1 {
@@ -1046,10 +1214,13 @@
     display: flex;
     flex: 1;
     min-height: 0;
+    overflow: hidden;
   }
 
   .sidebar {
     width: 300px;
+    flex: 0 0 300px;
+    min-height: 0;
     background: rgba(255, 255, 255, 0.9);
     border-right: 1px solid #dde4ee;
     position: relative;
@@ -1058,6 +1229,7 @@
 
   .sidebar.collapsed {
     width: 40px;
+    flex-basis: 40px;
   }
 
   .toggle-sidebar-btn {
@@ -1074,6 +1246,8 @@
   }
 
   .sidebar-content {
+    height: 100%;
+    box-sizing: border-box;
     padding: 16px;
     overflow-y: auto;
   }
@@ -1147,12 +1321,25 @@
     overflow: hidden;
   }
 
+  .room-tools {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 0;
+    max-height: clamp(300px, 44vh, 520px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    box-sizing: border-box;
+    padding: 18px 20px;
+    border-bottom: 1px solid #dde4ee;
+  }
+
   .toolbelt {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     align-items: start;
     gap: 16px;
-    padding: 18px 20px 0;
   }
 
   .tool-card {
@@ -1230,6 +1417,87 @@
     font-size: 0.92rem;
   }
 
+  [data-testid="video-grid-panel"] {
+    grid-column: span 2;
+  }
+
+  .local-video-preview {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #1f2937;
+    aspect-ratio: 16 / 9;
+    max-height: 200px;
+  }
+
+  .local-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .video-muted-overlay,
+  .screen-share-badge {
+    position: absolute;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    pointer-events: none;
+  }
+
+  .video-muted-overlay {
+    top: 8px;
+    left: 8px;
+    background: rgba(0, 0, 0, 0.64);
+    color: #fca5a5;
+  }
+
+  .screen-share-badge {
+    top: 8px;
+    right: 8px;
+    background: rgba(49, 81, 211, 0.88);
+    color: white;
+  }
+
+  .remote-video-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+    max-height: 360px;
+    overflow-y: auto;
+  }
+
+  .remote-video-item {
+    border-radius: 12px;
+    overflow: hidden;
+    background: #1f2937;
+    aspect-ratio: 16 / 9;
+    position: relative;
+  }
+
+  .remote-video-label {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.64);
+    color: white;
+    font-size: 0.8rem;
+    font-weight: 600;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .remote-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
   .transfer-meta,
   .transfer-footer,
   .transfer-progress {
@@ -1283,6 +1551,7 @@
 
   .message-list {
     flex: 1;
+    min-height: 160px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -1346,9 +1615,14 @@
   }
 
   .message-input-container {
+    flex: 0 0 auto;
+    position: sticky;
+    bottom: 0;
+    z-index: 3;
     padding: 16px 20px 20px;
     border-top: 1px solid #dde4ee;
     background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.06);
   }
 
   .message-input-wrapper {
@@ -1435,19 +1709,34 @@
     .sidebar,
     .sidebar.collapsed {
       width: 100%;
+      flex: 0 0 auto;
+      max-height: 220px;
     }
 
     .toolbelt {
+      grid-template-columns: 1fr;
+    }
+
+    [data-testid="video-grid-panel"] {
+      grid-column: span 1;
+    }
+
+    .remote-video-grid {
       grid-template-columns: 1fr;
     }
   }
 
   @media (max-width: 720px) {
     .room-header,
+    .room-tools,
     .message-input-container,
     .message-list {
       padding-left: 14px;
       padding-right: 14px;
+    }
+
+    .room-tools {
+      max-height: min(300px, 34vh);
     }
 
     .header-left {
@@ -1456,8 +1745,17 @@
       gap: 8px;
     }
 
+    .header-actions {
+      width: 100%;
+      justify-content: space-between;
+    }
+
     .message {
       max-width: 100%;
+    }
+
+    .message-list {
+      min-height: 120px;
     }
 
     .message-input-wrapper,
@@ -1470,5 +1768,6 @@
     .secondary-btn {
       width: 100%;
     }
+
   }
 </style>

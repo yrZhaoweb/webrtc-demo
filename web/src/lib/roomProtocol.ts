@@ -1,15 +1,16 @@
+import type { JsonObject } from "@yrzhao/aves-core";
 import type { ChatMessage } from "./types";
 
 const ROOM_ENVELOPE_TYPE = "webrtc-demo-room-envelope";
 const SHARED_HISTORY_LIMIT = 200;
 
-export interface HistoryRequestPayload {
+export interface HistoryRequestPayload extends JsonObject {
   requesterId: string;
   requesterName: string;
   requestedAt: number;
 }
 
-export interface HistorySnapshotPayload {
+export interface HistorySnapshotPayload extends JsonObject {
   hostId: string;
   hostName: string;
   audioEnabled: boolean;
@@ -17,46 +18,33 @@ export interface HistorySnapshotPayload {
   sentAt: number;
 }
 
-export interface AudioPolicyPayload {
+export interface AudioPolicyPayload extends JsonObject {
   enabled: boolean;
   hostId: string;
   hostName: string;
   updatedAt: number;
 }
 
-export interface RoomDissolvedPayload {
+export interface RoomDissolvedPayload extends JsonObject {
   hostId: string;
   hostName: string;
   reason: string;
   dissolvedAt: number;
 }
 
+interface BaseRoomEnvelope<Kind extends string, Payload extends JsonObject>
+  extends JsonObject {
+  __demoType: typeof ROOM_ENVELOPE_TYPE;
+  kind: Kind;
+  payload: Payload;
+}
+
 export type RoomEnvelope =
-  | {
-      __demoType: typeof ROOM_ENVELOPE_TYPE;
-      kind: "chat-message";
-      payload: ChatMessage;
-    }
-  | {
-      __demoType: typeof ROOM_ENVELOPE_TYPE;
-      kind: "history-request";
-      payload: HistoryRequestPayload;
-    }
-  | {
-      __demoType: typeof ROOM_ENVELOPE_TYPE;
-      kind: "history-snapshot";
-      payload: HistorySnapshotPayload;
-    }
-  | {
-      __demoType: typeof ROOM_ENVELOPE_TYPE;
-      kind: "audio-policy";
-      payload: AudioPolicyPayload;
-    }
-  | {
-      __demoType: typeof ROOM_ENVELOPE_TYPE;
-      kind: "room-dissolved";
-      payload: RoomDissolvedPayload;
-    };
+  | BaseRoomEnvelope<"chat-message", ChatMessage>
+  | BaseRoomEnvelope<"history-request", HistoryRequestPayload>
+  | BaseRoomEnvelope<"history-snapshot", HistorySnapshotPayload>
+  | BaseRoomEnvelope<"audio-policy", AudioPolicyPayload>
+  | BaseRoomEnvelope<"room-dissolved", RoomDissolvedPayload>;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -73,9 +61,7 @@ export function isChatMessage(value: unknown): value is ChatMessage {
     typeof value.senderName === "string" &&
     typeof value.content === "string" &&
     typeof value.timestamp === "number" &&
-    (value.type === undefined ||
-      value.type === "user" ||
-      value.type === "system")
+    (value.type === "user" || value.type === "system")
   );
 }
 
