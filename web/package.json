@@ -1,16 +1,16 @@
 {
   "name": "web",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "preview": "vite preview",
-    "test": "vitest",
+    "test": "vitest run",
     "test:ui": "vitest --ui",
-    "test:e2e": "playwright test",
+    "test:e2e": "playwright test --config=playwright.config.ts",
     "test:visual": "playwright test --grep @visual"
   },
   "dependencies": {
