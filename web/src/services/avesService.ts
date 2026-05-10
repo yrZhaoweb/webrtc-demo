@@ -24,8 +24,8 @@ const DEFAULT_VIDEO_CONSTRAINTS: AvesVideoConstraints = {
 };
 
 export const SDK_VERSIONS = {
-  core: "0.3.0",
-  node: "0.3.0",
+  core: "1.1.0",
+  node: "1.1.0",
 } as const;
 
 const ErrorMessages = {
@@ -62,9 +62,17 @@ export interface DemoFileTransfer extends FileTransferInfo {
 export interface DemoServerHealth {
   connections: number;
   rooms: number;
-  storage: "memory" | "redis";
+  storage: "memory" | "redis" | "mongodb";
   roomTimeout: number;
   uptime: number;
+}
+
+export interface DemoServerMetrics extends DemoServerHealth {
+  participants: number;
+  pendingDisconnects: number;
+  rateLimitBuckets: number;
+  reconnectGraceMs: number;
+  maxMessageSize: number;
 }
 
 export interface DemoServerRoom {
@@ -136,6 +144,7 @@ const remoteVideoStreams = writable<Map<string, MediaStream>>(new Map());
 const fileTransfers = writable<DemoFileTransfer[]>([]);
 const localPreviewStream = writable<MediaStream | null>(null);
 const serverHealth = writable<DemoServerHealth | null>(null);
+const serverMetrics = writable<DemoServerMetrics | null>(null);
 const serverRooms = writable<DemoServerRoom[]>([]);
 const serverDiagnosticsError = writable<string | null>(null);
 const lastAvesError = writable<DemoAvesError | null>(null);
@@ -570,12 +579,14 @@ function isClientInitialized(): boolean {
 
 async function fetchServerDiagnostics(): Promise<{
   health: DemoServerHealth;
+  metrics: DemoServerMetrics;
   rooms: DemoServerRoom[];
 } | null> {
   try {
     const baseUrl = getDiagnosticsBaseUrl();
-    const [healthResponse, roomsResponse] = await Promise.all([
+    const [healthResponse, metricsResponse, roomsResponse] = await Promise.all([
       fetch(`${baseUrl}/health`),
+      fetch(`${baseUrl}/metrics`),
       fetch(`${baseUrl}/rooms`),
     ]);
 
@@ -587,22 +598,29 @@ async function fetchServerDiagnostics(): Promise<{
       throw new Error(`Rooms request failed with ${roomsResponse.status}`);
     }
 
+    if (!metricsResponse.ok) {
+      throw new Error(`Metrics request failed with ${metricsResponse.status}`);
+    }
+
     const health = (await healthResponse.json()) as DemoServerHealth;
+    const metrics = (await metricsResponse.json()) as DemoServerMetrics;
     const roomsPayload = (await roomsResponse.json()) as {
       rooms?: DemoServerRoom[];
     };
     const rooms = Array.isArray(roomsPayload.rooms) ? roomsPayload.rooms : [];
 
     serverHealth.set(health);
+    serverMetrics.set(metrics);
     serverRooms.set(rooms);
     serverDiagnosticsError.set(null);
     appendDiagnosticEvent("info", "aves-node", "Server diagnostics refreshed", {
       connections: health.connections,
       rooms: health.rooms,
+      participants: metrics.participants,
       storage: health.storage,
     });
 
-    return { health, rooms };
+    return { health, metrics, rooms };
   } catch (diagnosticsError) {
     const message =
       diagnosticsError instanceof Error
@@ -851,6 +869,7 @@ function resetState(): void {
   fileTransfers.set([]);
   localPreviewStream.set(null);
   serverHealth.set(null);
+  serverMetrics.set(null);
   serverRooms.set([]);
   serverDiagnosticsError.set(null);
   lastAvesError.set(null);
@@ -877,6 +896,7 @@ export const avesService = {
   fileTransfers,
   localPreviewStream,
   serverHealth,
+  serverMetrics,
   serverRooms,
   serverDiagnosticsError,
   lastAvesError,

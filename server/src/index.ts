@@ -55,6 +55,11 @@ export function createDemoRequestHandler(
           return;
         }
 
+        if (url.pathname === "/metrics") {
+          writeJson(response, 200, await avesServer.getMetrics());
+          return;
+        }
+
         if (url.pathname === "/rooms") {
           writeJson(response, 200, {
             rooms: await avesServer.getAllRooms(),
@@ -65,7 +70,7 @@ export function createDemoRequestHandler(
         writeJson(response, 200, {
           name: "webrtc-demo-server",
           status: "ok",
-          endpoints: ["/health", "/rooms"],
+          endpoints: ["/health", "/metrics", "/rooms"],
         });
       } catch (error) {
         writeJson(response, 500, {
@@ -165,7 +170,7 @@ export function createDemoServer(
     : new WebSocketServer(options);
 
   const close = async () => {
-    avesServer.close();
+    await avesServer.close();
     await closeWebSocketServer(wss);
     if (httpServer) {
       await new Promise<void>((resolve, reject) => {

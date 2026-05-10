@@ -85,4 +85,40 @@ describe("demo server entry", () => {
     disposeHandlers();
     exitSpy.mockRestore();
   });
+
+  it("exposes server metrics over HTTP", async () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+      return undefined as never;
+    }) as typeof process.exit);
+
+    const { httpServer, close, disposeHandlers } = createDemoServer(0);
+    expect(httpServer).toBeDefined();
+
+    await new Promise<void>((resolve) => {
+      httpServer!.once("listening", resolve);
+    });
+
+    const address = httpServer!.address();
+    expect(address).toBeTruthy();
+    expect(typeof address).not.toBe("string");
+
+    const response = await fetch(`http://127.0.0.1:${address && typeof address !== "string" ? address.port : 0}/metrics`);
+    const metrics = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(metrics).toEqual(
+      expect.objectContaining({
+        connections: 0,
+        rooms: 0,
+        participants: 0,
+        pendingDisconnects: 0,
+        storage: "memory",
+        maxMessageSize: 262144,
+      }),
+    );
+
+    await close();
+    disposeHandlers();
+    exitSpy.mockRestore();
+  });
 });

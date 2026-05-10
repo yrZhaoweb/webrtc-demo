@@ -144,7 +144,7 @@ describe("avesService", () => {
     vi.clearAllMocks();
   });
 
-  it("configures the 0.3.0 client for media, file transfer, and reconnect validation", async () => {
+  it("configures the 1.1.0 client for media, file transfer, and reconnect validation", async () => {
     const { avesService } = await import("./avesService");
 
     avesService.getClient();
@@ -238,7 +238,7 @@ describe("avesService", () => {
     );
   });
 
-  it("sends files with explicit 0.3.0 metadata options", async () => {
+  it("sends files with explicit 1.1.0 metadata options", async () => {
     const { avesService } = await import("./avesService");
     const file = new File(["hello"], "hello.txt", {
       type: "text/plain",

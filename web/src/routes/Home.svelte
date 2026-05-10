@@ -3,7 +3,7 @@
   import { avesService } from '../services/avesService';
   import { generateUserId } from '../utils';
 
-  const { isConnecting, error, createRoom } = avesService;
+  const { isConnecting, error, createRoom, sdkVersions } = avesService;
 
   let userName = '';
   let showNameInput = false;
@@ -43,6 +43,10 @@
   <div class="home-content">
     <h1>WebRTC 实时协作室</h1>
     <p class="subtitle">基于 WebRTC 的文本、文件与实时语音协作</p>
+    <div class="version-badges" data-testid="sdk-version-badges">
+      <span>aves-core {sdkVersions.core}</span>
+      <span>aves-node {sdkVersions.node}</span>
+    </div>
 
     {#if !showNameInput}
       <div class="action-section">
@@ -114,7 +118,25 @@
   .subtitle {
     color: #666;
     font-size: 1rem;
-    margin-bottom: 40px;
+    margin-bottom: 20px;
+  }
+
+  .version-badges {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 32px;
+  }
+
+  .version-badges span {
+    border: 1px solid #d8def0;
+    border-radius: 999px;
+    padding: 6px 10px;
+    color: #46516a;
+    background: #f7f8fc;
+    font-size: 0.78rem;
+    font-weight: 700;
   }
 
   .action-section {

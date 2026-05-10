@@ -21,6 +21,7 @@
     fileTransfers,
     peerStates,
     serverHealth,
+    serverMetrics,
     serverRooms,
     serverDiagnosticsError,
     lastAvesError,
@@ -105,7 +106,7 @@
 <section class="validation-console" data-testid="validation-console">
   <div class="console-header">
     <div>
-      <span class="eyebrow">0.3.0 验证台</span>
+      <span class="eyebrow">1.1.0 验证台</span>
       <h3>测试控制台</h3>
     </div>
     <button
@@ -169,6 +170,9 @@
       <div class="metric-list">
         <div><span>服务端连接</span><strong>{$serverHealth?.connections ?? 0}</strong></div>
         <div><span>服务端房间</span><strong>{$serverHealth?.rooms ?? $serverRooms.length}</strong></div>
+        <div><span>服务端参与者</span><strong>{$serverMetrics?.participants ?? 0}</strong></div>
+        <div><span>待恢复断线</span><strong>{$serverMetrics?.pendingDisconnects ?? 0}</strong></div>
+        <div><span>限流桶</span><strong>{$serverMetrics?.rateLimitBuckets ?? 0}</strong></div>
         <div><span>当前房间人数</span><strong>{currentServerRoom?.participantCount ?? participantCount}</strong></div>
         <div><span>P2P connected</span><strong>{connectedPeerCount}/{peerStateEntries.length}</strong></div>
         <div><span>DataChannel open</span><strong>{openDataChannelCount}/{peerStateEntries.length}</strong></div>
